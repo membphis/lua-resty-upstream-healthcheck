@@ -435,7 +435,11 @@ local function get_lock(ctx)
     return true
 end
 
-local function do_check(ctx)
+local function check(premature, ctx)
+    if premature then
+        return
+    end
+
     debug("healthcheck: run a check cycle")
 
     check_peers_updates(ctx)
@@ -477,28 +481,6 @@ local function update_upstream_checker_status(upstream, success)
     end
 
     upstream_checker_statuses[upstream] = cnt
-end
-
-local check
-check = function (premature, ctx)
-    if premature then
-        return
-    end
-
-    local ok, err = pcall(do_check, ctx)
-    if not ok then
-        errlog("failed to run healthcheck cycle: ", err)
-    end
-
-    local ok, err = new_timer(ctx.interval, check, ctx)
-    if not ok then
-        if err ~= "process exiting" then
-            errlog("failed to create timer: ", err)
-        end
-
-        update_upstream_checker_status(ctx.upstream, false)
-        return
-    end
 end
 
 local function preprocess_peers(peers)
@@ -591,12 +573,12 @@ function _M.spawn_checker(opts)
         return nil, "no upstream specified"
     end
 
-    local ppeers, err = get_primary_peers(u)
+    local ppeers, err = opts.primary_nodes or get_primary_peers(u)
     if not ppeers then
         return nil, "failed to get primary peers: " .. err
     end
 
-    local bpeers, err = get_backup_peers(u)
+    local bpeers, err = opts.backup_nodes or get_backup_peers(u)
     if not bpeers then
         return nil, "failed to get backup peers: " .. err
     end
@@ -616,9 +598,9 @@ function _M.spawn_checker(opts)
         concurrency = concur,
     }
 
-    local ok, err = new_timer(0, check, ctx)
+    ok, err = ngx.timer.every(ctx.interval, check, ctx)
     if not ok then
-        return nil, "failed to create timer: " .. err
+        return nil, "failed to create every timer: " .. err
     end
 
     update_upstream_checker_status(u, true)
